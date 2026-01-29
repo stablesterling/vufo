@@ -749,6 +749,9 @@
     <!-- Audio Element for Background Play -->
     <audio id="audio-player" crossorigin="anonymous"></audio>
 
+    <!-- YouTube fallback iframe -->
+    <iframe id="youtube-fallback" style="display: none;"></iframe>
+
     <script>
         // State management
         const state = {
@@ -1060,12 +1063,21 @@
                     // Update UI
                     updatePlayerInfo(song);
                     
-                    // Set audio source
+                    // Set audio source with CORS
                     elements.audioPlayer.src = data.stream_url;
+                    elements.audioPlayer.crossOrigin = 'anonymous';
+                    
+                    // Load and play
                     elements.audioPlayer.load();
                     
-                    // Play
-                    await elements.audioPlayer.play();
+                    try {
+                        await elements.audioPlayer.play();
+                    } catch (playError) {
+                        console.log('Direct play failed, trying fallback...', playError);
+                        // Try fallback method
+                        await tryFallbackPlay(song);
+                        return;
+                    }
                     
                     // Update song list
                     updatePlayingSongInList();
@@ -1084,9 +1096,41 @@
                 }
             } catch (error) {
                 console.error('Play error:', error);
-                showNotification('Error playing song', 'error');
+                showNotification('Error playing song. Trying fallback method...', 'error');
+                
+                // Try fallback method
+                tryFallbackPlay(song);
             } finally {
                 showLoading(false);
+            }
+        }
+
+        async function tryFallbackPlay(song) {
+            showNotification('Using fallback player...');
+            
+            // Create a hidden iframe for YouTube playback
+            let iframe = document.getElementById('youtube-fallback');
+            if (!iframe) {
+                iframe = document.createElement('iframe');
+                iframe.id = 'youtube-fallback';
+                iframe.style.display = 'none';
+                iframe.allow = 'autoplay';
+                document.body.appendChild(iframe);
+            }
+            
+            // Update UI
+            updatePlayerInfo(song);
+            state.currentSong = song;
+            
+            // Load YouTube video in iframe with autoplay
+            iframe.src = `https://www.youtube.com/embed/${song.id}?autoplay=1&controls=0&enablejsapi=1&origin=${window.location.origin}`;
+            
+            // Show notification
+            if (Notification.permission === 'granted' && document.hidden) {
+                new Notification('MusicStream', {
+                    body: `Now playing: ${song.title} (YouTube)`,
+                    icon: song.thumbnail || 'https://cdn-icons-png.flaticon.com/512/727/727241.png'
+                });
             }
         }
 

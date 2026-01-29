@@ -11,9 +11,19 @@ from database import db, User, Playlist, Song
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
-# Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://vofodb_user:Y7MQfAWwEtsiHQLiGHFV7ikOI2ruTv3u@dpg-d5lm4ongi27c7390kq40-a/vofodb')
+# Database configuration - Fix for Python 3.13
+database_url = os.environ.get('DATABASE_URL', 'postgresql://vofodb_user:Y7MQfAWwEtsiHQLiGHFV7ikOI2ruTv3u@dpg-d5lm4ongi27c7390kq40-a/vofodb')
+
+# Replace psycopg2 driver with pg8000 for Python 3.13 compatibility
+if database_url.startswith('postgresql://'):
+    database_url = database_url.replace('postgresql://', 'postgresql+pg8000://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_recycle': 300,
+    'pool_pre_ping': True,
+}
 
 # Initialize extensions
 db.init_app(app)
@@ -395,9 +405,24 @@ def manifest():
     }
     return jsonify(manifest_data)
 
+@app.errorhandler(404)
+def not_found(e):
+    """Handle 404 errors"""
+    return render_template('index.html')
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Handle 500 errors"""
+    return jsonify({'error': 'Internal server error'}), 500
+
 # Create database tables
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        print("Database tables created successfully")
+    except Exception as e:
+        print(f"Error creating database tables: {e}")
+        print("This might be due to database connection issues. The app will still run, but database features may not work.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

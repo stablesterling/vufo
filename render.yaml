@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: music-stream
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: DATABASE_URL
+        value: postgresql://vofodb_user:Y7MQfAWwEtsiHQLiGHFV7ikOI2ruTv3u@dpg-d5lm4ongi27c7390kq40-a/vofodb
+      - key: SECRET_KEY
+        generateValue: true

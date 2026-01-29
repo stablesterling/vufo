@@ -1,11 +1,11 @@
-from flask import Flask, render_template, request, jsonify, session, make_response, redirect
+from flask import Flask, render_template, request, jsonify, session, make_response
 from flask_cors import CORS
 import json
 import os
 import re
 import uuid
 from datetime import datetime
-from urllib.parse import quote_plus
+from pathlib import Path
 
 # Import for YouTube functionality
 from pytube import YouTube
@@ -18,19 +18,11 @@ from flask_sqlalchemy import SQLAlchemy
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
-# Database configuration - Use pg8000 for Python 3.13 compatibility
-database_url = os.environ.get('DATABASE_URL', 'postgresql://vofodb_user:Y7MQfAWwEtsiHQLiGHFV7ikOI2ruTv3u@dpg-d5lm4ongi27c7390kq40-a/vofodb')
-
-# Force pg8000 driver
-if database_url.startswith('postgresql://'):
-    database_url = database_url.replace('postgresql://', 'postgresql+pg8000://', 1)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+# Database configuration - Use SQLite to avoid PostgreSQL driver issues
+# Use absolute path for SQLite database
+db_path = Path(__file__).parent / 'music.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_recycle': 300,
-    'pool_pre_ping': True,
-}
 
 # Initialize SQLAlchemy
 db = SQLAlchemy(app)
@@ -83,22 +75,6 @@ def get_or_create_user():
         db.session.commit()
     
     return user
-
-def get_video_info(video_id):
-    """Get video information from YouTube"""
-    try:
-        yt = YouTube(f'https://www.youtube.com/watch?v={video_id}')
-        return {
-            'id': video_id,
-            'title': yt.title,
-            'duration': yt.length,
-            'thumbnail': yt.thumbnail_url,
-            'channel': yt.author,
-            'url': f"https://www.youtube.com/watch?v={video_id}"
-        }
-    except Exception as e:
-        print(f"Error fetching video info: {e}")
-        return None
 
 def search_youtube(query, limit=10):
     """Search YouTube for videos"""
@@ -166,36 +142,46 @@ def extract_video_id(url):
 def get_audio_stream_url(video_id):
     """Get audio stream URL using pytube"""
     try:
+        # First try to get progressive stream (audio+video together)
         yt = YouTube(f'https://www.youtube.com/watch?v={video_id}')
         
-        # Get the best audio stream
-        audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+        # Get progressive streams (audio+video)
+        progressive_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
         
-        if audio_stream:
-            # For progressive streams (audio+video), pytube returns the URL directly
-            # For adaptive streams, we need to use the URL with additional parameters
-            stream_url = audio_stream.url
-            
-            # Add additional headers to prevent 403 errors
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Range': 'bytes=0-',
-                'Referer': 'https://www.youtube.com/',
-                'Origin': 'https://www.youtube.com',
-                'Connection': 'keep-alive',
-            }
-            
+        if progressive_streams:
+            # Use the highest resolution progressive stream
+            stream = progressive_streams.first()
             return {
-                'stream_url': stream_url,
-                'headers': headers,
+                'stream_url': stream.url,
                 'title': yt.title,
                 'duration': yt.length,
-                'thumbnail': yt.thumbnail_url
+                'thumbnail': yt.thumbnail_url,
+                'headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://www.youtube.com/',
+                }
             }
-        else:
-            return None
+        
+        # Fallback: Get adaptive audio stream
+        audio_streams = yt.streams.filter(only_audio=True).order_by('abr').desc()
+        if audio_streams:
+            stream = audio_streams.first()
+            return {
+                'stream_url': stream.url,
+                'title': yt.title,
+                'duration': yt.length,
+                'thumbnail': yt.thumbnail_url,
+                'headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://www.youtube.com/',
+                }
+            }
+        
+        return None
     except Exception as e:
         print(f"Error getting audio stream: {e}")
         return None
@@ -238,8 +224,7 @@ def get_stream_url():
                 'stream_url': stream_info['stream_url'],
                 'title': stream_info['title'],
                 'duration': stream_info['duration'],
-                'thumbnail': stream_info['thumbnail'],
-                'headers': stream_info.get('headers', {})
+                'thumbnail': stream_info['thumbnail']
             })
         else:
             return jsonify({'error': 'Could not extract stream URL'}), 500
